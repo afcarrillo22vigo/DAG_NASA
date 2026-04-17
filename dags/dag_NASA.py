@@ -96,22 +96,19 @@ def pipeline_nasa():
 
         # 1. Descargar de plata
         objeto = s3.get_object(Bucket="capa-plata", Key=nombre_archivo)
-        df = pd.read_csv(BytesIO(objeto["Body"].read()))
+        df = pd.read_csv(objeto["Body"])
 
         # 2. Transformación: Top 3 más grandes
         df_top3 = df.sort_values(by="diametro_max_km", ascending=False).head(3)
         df_top3_clean = df_top3[["nombre", "diametro_max_km", "velocidad_kmh"]]
 
         # 3. Subir a Oro en MinIO (Convertido a CSV)
-        csv_oro = f"top_3_asteroides_{fecha}.csv"
-        s3.put_object(
-            Bucket="capa-oro", Key=csv_oro, Body=df_top3_clean.to_csv(index=False)
-        )
+        nombre_archivo = f"top_3_asteroides_{fecha}.csv"
+        csv_oro = df_top3_clean.to_csv(index=False)
+        s3.put_object(Bucket="capa-oro", Key=nombre_archivo, Body=csv_oro)
 
         # 4. Inyectar en Postgres (Sin espacios en el nombre)
-        motor = create_engine(
-            "postgresql+psycopg2://airflow:airflow@postgres:5432/airflow"
-        )
+        motor = create_engine("postgresql+psycopg2://airflow:airflow@postgres/airflow")
         df_top3_clean.to_sql(
             "top_3_asteroides", motor, if_exists="replace", index=False
         )
