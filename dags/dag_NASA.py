@@ -9,6 +9,8 @@ import pandas as pd
 from datetime import date
 from sqlalchemy import create_engine
 from io import BytesIO
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
 
 
 @dag(
@@ -28,6 +30,41 @@ def pipeline_nasa():
             region_name="us-east-1",  # Región por defecto
         )
         return s3_client
+
+    @task
+    def aplicar_machine_learning(csv_asteroides):
+        s3 = conectarse_bd()
+        nombre_archivo = csv_asteroides.get("archivo")
+
+        # 1. Descargamos los datos limpios de la Capa Plata
+        objeto = s3.get_object(Bucket="capa-plata", Key=nombre_archivo)
+        df = pd.read_csv(objeto["Body"])
+
+        # 2. Preparamos los datos para la IA
+        # X (Pistas): Tamaño y velocidad
+        x = df[["diametro_max_km", "velocidad_kmh"]]
+
+        # y (Respuesta): Peligroso o no (convertimos True/False a 1 y 0 para que la máquina lo entienda)
+        y = df["peligroso"].astype(int)
+
+        # 3. Creamos el Cerebro Artificial (Un Bosque Aleatorio)
+        modelo = RandomForestClassifier(random_state=42)
+
+        # 4. ENTRENAMIENTO: La máquina estudia las pistas y las respuestas
+        modelo.fit(x, y)
+
+        # 5. EXAMEN: Le pedimos que prediga el peligro usando solo las pistas
+        df["prediccion_IA"] = modelo.predict(x)
+
+        # Calculamos la nota del examen (Precisión)
+        nota = accuracy_score(y, df["prediccion_IA"])
+        logging.info(f"IA Entrenada. Precisión del modelo: {nota * 100}%")
+
+        # 6. Guardamos los datos con la opinión de la IA en Postgres
+        motor = create_engine("postgresql+psycopg2://airflow:airflow@postgres/airflow")
+        df.to_sql("predicciones_asteroides", motor, if_exists="replace", index=False)
+
+        return "Machine Learning finalizado"
 
     @task
     def extraer_bronce():
@@ -112,12 +149,17 @@ def pipeline_nasa():
         df_top3_clean.to_sql(
             "top_3_asteroides", motor, if_exists="replace", index=False
         )
+        df_lista_peligrosos = df[["nombre", "peligroso"]].copy()
+        df_lista_peligrosos.to_sql(
+            "Lista_Asteroides_Peligrosos", motor, if_exists="replace", index=False
+        )
 
         logging.info("Capa Oro y Data Warehouse actualizados con el Top 3!")
 
     asteroides = extraer_bronce()
     csv_asteroides = transformar_plata(asteroides)
     cargar_oro(csv_asteroides)
+    aplicar_machine_learning(csv_asteroides)
 
 
 pipeline_nasa()
